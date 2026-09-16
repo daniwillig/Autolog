@@ -23,10 +23,8 @@
       -webkit-tap-highlight-color: transparent;
       overscroll-behavior: none;
     }
-    /* Evita bounce no iOS */
     body { position: fixed; width: 100%; overflow: hidden; }
     #root { overflow-y: auto; height: 100%; }
-    /* Loading spinner */
     #splash {
       position: fixed; inset: 0;
       background: #0E1117;
@@ -56,70 +54,59 @@
 
   <div id="root"></div>
 
-  <!-- React -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <!-- Babel standalone para compilar JSX no browser -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- Carrega e compila o app.jsx -->
   <script>
+    // Disponibiliza hooks React globalmente para o código compilado
+    window.useState  = React.useState;
+    window.useEffect = React.useEffect;
+
     fetch('app.jsx')
       .then(r => r.text())
       .then(src => {
-        // Transforma o JSX + ES modules para browser
-        const transformed = Babel.transform(src, {
+        // 1) Remove imports (React já está global via UMD)
+        src = src.replace(/^import\s+.*$/gm, '');
+
+        // 2) Transforma "export default function App()" → "function App()"
+        //    e captura o nome da função exportada
+        let exportedName = 'App';
+        src = src.replace(
+          /export\s+default\s+function\s+(\w+)/,
+          (_, name) => { exportedName = name; return 'function ' + name; }
+        );
+
+        // 3) Transforma "export default ArrowOrClass" → remove e salva nome
+        src = src.replace(
+          /export\s+default\s+(\w+)\s*;?/,
+          (_, name) => { exportedName = name; return ''; }
+        );
+
+        // 4) Compila JSX via Babel (só preset react, sem plugins problemáticos)
+        const compiled = Babel.transform(src, {
           presets: ['react'],
-          plugins: [
-            // transforma export default em window.AppComponent
-            function({ types: t }) {
-              return {
-                visitor: {
-                  ExportDefaultDeclaration(path) {
-                    const decl = path.node.declaration;
-                    path.replaceWith(
-                      t.expressionStatement(
-                        t.assignmentExpression('=',
-                          t.memberExpression(t.identifier('window'), t.identifier('AppComponent')),
-                          decl
-                        )
-                      )
-                    );
-                  },
-                  ImportDeclaration(path) {
-                    // Remove os imports de React (já carregados via UMD)
-                    path.remove();
-                  }
-                }
-              };
-            }
-          ]
+          filename: 'app.jsx'
         }).code;
 
-        // Injeta React no escopo global para o JSX compilado
-        window.useState   = React.useState;
-        window.useEffect  = React.useEffect;
-
-        // Executa o código transformado
+        // 5) Executa e expõe o componente
         // eslint-disable-next-line no-new-func
-        new Function(transformed)();
+        const mod = new Function('React', compiled + '\n; return ' + exportedName + ';');
+        const AppComponent = mod(React);
 
-        // Monta o app
+        // 6) Monta
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(React.createElement(window.AppComponent));
+        root.render(React.createElement(AppComponent));
 
-        // Remove splash
         document.getElementById('splash').remove();
       })
       .catch(err => {
         document.getElementById('splash').innerHTML =
-          `<p style="color:#e24b4a;padding:24px;text-align:center">
-            Erro ao carregar o app.<br/><small>${err.message}</small>
-          </p>`;
+          '<p style="color:#e24b4a;padding:24px;text-align:center">' +
+          'Erro ao carregar o app.<br/><small>' + err.message + '</small></p>';
       });
   </script>
 
-  <!-- Registra o Service Worker -->
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {

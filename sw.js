@@ -1,4 +1,4 @@
-const CACHE_NAME = 'autolog-v1';
+const CACHE_NAME = 'autolog-v2';
 
 // Arquivos locais que precisam funcionar offline
 const LOCAL_ASSETS = [
@@ -61,6 +61,25 @@ self.addEventListener('fetch', event => {
   // Ignora extensões de browser e chrome-extension://
   if (!request.url.startsWith('http')) return;
 
+  // Navegação/HTML: network-first, para sempre pegar a versão mais nova
+  // publicada (o app inteiro mora no index.html, então cache-first aqui
+  // travaria os usuários numa versão antiga até um bump manual de cache).
+  if (request.destination === 'document') {
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request).then(cached => cached || caches.match('./index.html')))
+    );
+    return;
+  }
+
+  // Demais assets (CDNs, ícones etc.): cache-first
   event.respondWith(
     caches.match(request).then(cached => {
       if (cached) return cached;
@@ -75,12 +94,7 @@ self.addEventListener('fetch', event => {
           caches.open(CACHE_NAME).then(cache => cache.put(request, clone));
           return response;
         })
-        .catch(() => {
-          // Offline e não está em cache: retorna o index.html (SPA fallback)
-          if (request.destination === 'document') {
-            return caches.match('./index.html');
-          }
-        });
+        .catch(() => {});
     })
   );
 });

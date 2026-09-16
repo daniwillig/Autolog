@@ -1,0 +1,871 @@
+import { useState, useEffect } from "react";
+
+const STORAGE_KEYS = {
+  fuel: "autolog_fuel",
+  months: "autolog_months",
+  vehicle: "autolog_vehicle",
+  revisions: "autolog_revisions",
+};
+
+function load(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? JSON.parse(v) : fallback;
+  } catch { return fallback; }
+}
+function save(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+
+const fmt = (n, dec = 0) =>
+  n == null || isNaN(n) ? "—" : Number(n).toLocaleString("pt-BR", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+const fmtR = (n) =>
+  n == null || isNaN(n) ? "—" : Number(n).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+function today() { return new Date().toISOString().slice(0, 10); }
+function currentMonth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function daysBetween(dateStr) {
+  if (!dateStr) return null;
+  const diff = new Date(dateStr + "T00:00:00") - new Date(new Date().toDateString());
+  return Math.ceil(diff / 86400000);
+}
+function fmtDate(dateStr) {
+  if (!dateStr) return "—";
+  const [y, m, d] = dateStr.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+// ─── SVG ICONS ───────────────────────────────────────────────────────────────
+const ICONS = {
+  home: "M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z M9 22V12h6v10",
+  "gas-station": "M3 22V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v15 M3 11h12 M13 7l4.385 1.462A2 2 0 0 1 19 10.35V19a2 2 0 0 0 2 2v0a2 2 0 0 0 2-2v-7.138a2 2 0 0 0-.676-1.499L19 7",
+  road: "M4 19l4-15 M20 19l-4-15 M4 19h16 M7.5 7h9 M6.5 11h11 M5.5 15h13",
+  tool: "M7 10H3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1z M14 3H10a1 1 0 0 0-1 1v5h6V4a1 1 0 0 0-1-1z M21 14h-4a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1z M9 14h6 M12 9v5",
+  settings: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M9 12a3 3 0 1 0 6 0 3 3 0 0 0-6 0",
+  x: "M18 6L6 18 M6 6l12 12",
+  plus: "M12 5v14 M5 12h14",
+  trash: "M4 7h16 M10 11v6 M14 11v6 M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12 M9 7V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v3",
+  edit: "M7 7H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-1 M20.385 6.585a2.1 2.1 0 0 0-2.97-2.97L9 12v3h3l8.385-8.415z",
+  "arrow-left": "M15 6l-6 6 6 6",
+  "alert-triangle": "M12 9v4 M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636-2.87L13.637 3.59a1.914 1.914 0 0 0-3.274 0z M12 16h.01",
+  check: "M5 12l5 5L20 7",
+  download: "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2 M7 11l5 5 5-5 M12 4v12",
+  upload: "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2 M7 9l5-5 5 5 M12 4v12",
+};
+
+function Icon({ name, size = 20, color = "currentColor", style: s = {} }) {
+  const d = ICONS[name] || "";
+  const paths = d.split(" M ").map((seg, i) => (i === 0 ? seg : "M " + seg));
+  return (
+    <svg
+      width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke={color} strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round"
+      style={{ display: "inline-block", flexShrink: 0, ...s }}
+      aria-hidden="true"
+    >
+      {paths.map((p, i) => <path key={i} d={p} />)}
+    </svg>
+  );
+}
+
+
+// ─── NAV ────────────────────────────────────────────────────────────────────
+function Nav({ screen, setScreen }) {
+  const items = [
+    { id: "home",     icon: "ti-home",        label: "Início"     },
+    { id: "fuel",     icon: "ti-gas-station",  label: "Combustível"},
+    { id: "km",       icon: "ti-road",         label: "Km"         },
+    { id: "revision", icon: "ti-tool",         label: "Revisão"    },
+  ];
+  return (
+    <nav style={{
+      position: "fixed", bottom: 0, left: 0, right: 0,
+      background: "#141920", borderTop: "1px solid #2a3340",
+      display: "flex", zIndex: 100,
+    }}>
+      {items.map(it => (
+        <button key={it.id} onClick={() => setScreen(it.id)} style={{
+          flex: 1, padding: "10px 0 14px", border: "none", background: "none",
+          display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+          color: screen === it.id ? "#F5A623" : "#5a6a7a", cursor: "pointer",
+          fontSize: 10, fontFamily: "inherit", letterSpacing: "0.03em",
+        }}>
+          <Icon name={it.icon} size={20} color={screen === it.id ? "#F5A623" : "#5a6a7a"} />
+          {it.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+// ─── METRIC CARD ────────────────────────────────────────────────────────────
+function Metric({ label, value, unit, accent, sub }) {
+  return (
+    <div style={{
+      background: "#1C2128", borderRadius: 12, padding: "14px 16px",
+      border: accent ? "1px solid #F5A62355" : "1px solid #2a3340",
+    }}>
+      <div style={{ fontSize: 11, color: "#5a6a7a", marginBottom: 6, letterSpacing: "0.04em" }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: accent ? "#F5A623" : "#E8EAF0", lineHeight: 1 }}>
+        {value}
+        {unit && <span style={{ fontSize: 13, fontWeight: 400, color: "#5a6a7a", marginLeft: 4 }}>{unit}</span>}
+      </div>
+      {sub && <div style={{ fontSize: 11, color: "#5a6a7a", marginTop: 5 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// ─── HOME ───────────────────────────────────────────────────────────────────
+function Home({ fuel, months, vehicle, revisions }) {
+  const month = currentMonth();
+  const monthFuels = fuel.filter(f => f.date?.startsWith(month));
+  const lastMonthDate = (() => {
+    const d = new Date(); d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  })();
+  const lastMonthFuels = fuel.filter(f => f.date?.startsWith(lastMonthDate));
+  const monthSpend = monthFuels.reduce((s, f) => s + (Number(f.total) || 0), 0);
+
+  const sortedMonths = [...months].sort((a, b) => a.month.localeCompare(b.month));
+  const lastMonthEntry = months.find(m => m.month === lastMonthDate);
+  const lastMonthKm = (() => {
+    if (!lastMonthEntry) return null;
+    const idx = sortedMonths.findIndex(m => m.month === lastMonthDate);
+    if (idx <= 0) return null;
+    const prev = sortedMonths[idx - 1];
+    if (!prev?.km || !lastMonthEntry?.km) return null;
+    return lastMonthEntry.km - prev.km;
+  })();
+
+  const avgLast = (() => {
+    const pool = lastMonthFuels.length ? lastMonthFuels : monthFuels;
+    const avgs = pool.map(f => Number(f.avg)).filter(Boolean);
+    if (!avgs.length) return null;
+    return avgs.reduce((a, b) => a + b, 0) / avgs.length;
+  })();
+
+  // Next revision: use scheduled entry from revisions
+  const nextRev = revisions?.next ?? null;
+  const lastOdo = fuel.length ? Math.max(...fuel.map(f => Number(f.odometer) || 0)) : null;
+  const kmLeft = nextRev?.km && lastOdo ? nextRev.km - lastOdo : null;
+  const daysLeft = nextRev?.date ? daysBetween(nextRev.date) : null;
+
+  const revAlert = (kmLeft != null && kmLeft < 1500) || (daysLeft != null && daysLeft < 30);
+
+  return (
+    <div style={{ padding: "0 16px" }}>
+      <div style={{ paddingTop: 56, paddingBottom: 12 }}>
+        <div style={{ fontSize: 11, color: "#5a6a7a", letterSpacing: "0.06em", marginBottom: 4 }}>
+          {vehicle?.model ? vehicle.model.toUpperCase() : "MEU VEÍCULO"}
+        </div>
+        <div style={{ fontSize: 26, fontWeight: 700, color: "#E8EAF0" }}>Painel</div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+        <Metric label="Km no último mês" value={lastMonthKm != null ? fmt(lastMonthKm) : "—"} unit="km" />
+        <Metric label="Gasto este mês" value={monthSpend ? fmtR(monthSpend) : "—"} accent />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+        <Metric label="Média km/L (últ. mês)" value={avgLast != null ? fmt(avgLast, 1) : "—"} unit="km/L" />
+        <Metric
+          label="Próx. revisão"
+          value={kmLeft != null ? fmt(kmLeft) : "—"}
+          unit={kmLeft != null ? "km" : ""}
+          sub={daysLeft != null ? `${daysLeft > 0 ? `em ${daysLeft} dias` : "VENCIDA"}` : nextRev?.date ? fmtDate(nextRev.date) : "não agendada"}
+          accent={revAlert}
+        />
+      </div>
+
+      {revAlert && (
+        <div style={{
+          background: "#2a1a00", border: "1px solid #F5A62355", borderRadius: 10,
+          padding: "10px 14px", marginBottom: 10, display: "flex", alignItems: "center", gap: 10,
+        }}>
+          <Icon name="alert-triangle" size={18} />
+          <span style={{ fontSize: 13, color: "#F5A623" }}>
+            Revisão próxima —{kmLeft != null ? ` ${fmt(kmLeft)} km` : ""}
+            {daysLeft != null && kmLeft != null ? " · " : ""}
+            {daysLeft != null ? ` ${daysLeft} dias` : ""}
+          </span>
+        </div>
+      )}
+
+      {fuel.length === 0 && (
+        <div style={{
+          marginTop: 24, textAlign: "center", color: "#3a4a5a", padding: "32px 16px",
+          border: "1px dashed #2a3340", borderRadius: 12,
+        }}>
+          <Icon name="gas-station" size={36} />
+          <div style={{ fontSize: 14 }}>Nenhum abastecimento ainda</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>Vá em Combustível para registrar</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── FUEL FORM ──────────────────────────────────────────────────────────────
+function FuelForm({ onSave, onCancel, initialData }) {
+  const isEditing = !!initialData;
+  const [form, setForm] = useState(
+    initialData
+      ? { ...initialData, liters: String(initialData.liters), total: String(initialData.total), odometer: String(initialData.odometer), avg: String(initialData.avg) }
+      : { date: today(), liters: "", total: "", odometer: "", avg: "", reserve: false }
+  );
+  const [errors, setErrors] = useState({});
+  const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErrors(e => ({ ...e, [k]: "" })); };
+  const pricePerLiter = form.liters && form.total ? (Number(form.total) / Number(form.liters)).toFixed(3) : null;
+  const validate = () => {
+    const e = {};
+    if (!form.liters || isNaN(Number(form.liters))) e.liters = "Informe os litros";
+    if (!form.total || isNaN(Number(form.total))) e.total = "Informe o valor";
+    if (!form.odometer || isNaN(Number(form.odometer))) e.odometer = "Informe o hodômetro";
+    if (!form.avg || isNaN(Number(form.avg))) e.avg = "Informe a média";
+    return e;
+  };
+  const submit = () => {
+    const e = validate();
+    if (Object.keys(e).length) { setErrors(e); return; }
+    onSave({ ...form, liters: Number(form.liters), total: Number(form.total), odometer: Number(form.odometer), avg: Number(form.avg), id: initialData?.id ?? Date.now() });
+  };
+  const field = (label, key, props = {}) => (
+    <div style={{ marginBottom: 14 }}>
+      <label style={{ fontSize: 12, color: "#5a6a7a", display: "block", marginBottom: 4 }}>{label}</label>
+      <input value={form[key]} onChange={e => set(key, e.target.value)}
+        style={{ width: "100%", background: "#0E1117", border: `1px solid ${errors[key] ? "#e24b4a" : "#2a3340"}`, borderRadius: 8, padding: "12px 14px", fontSize: 16, color: "#E8EAF0", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }}
+        {...props} />
+      {errors[key] && <div style={{ fontSize: 11, color: "#e24b4a", marginTop: 3 }}>{errors[key]}</div>}
+    </div>
+  );
+  return (
+    <div style={{ padding: "0 16px" }}>
+      <div style={{ paddingTop: 56, paddingBottom: 16, display: "flex", alignItems: "center", gap: 12 }}>
+        <button onClick={onCancel} style={{ background: "none", border: "none", color: "#5a6a7a", cursor: "pointer", padding: 0 }}>
+          <Icon name="arrow-left" size={22} />
+        </button>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#E8EAF0" }}>{isEditing ? "Editar abastecimento" : "Novo abastecimento"}</div>
+      </div>
+      {field("Data", "date", { type: "date" })}
+      {field("Litros abastecidos", "liters", { type: "number", inputMode: "decimal", placeholder: "ex: 25.5" })}
+      {field("Total pago (R$)", "total", { type: "number", inputMode: "decimal", placeholder: "ex: 180.00" })}
+      {field("Hodômetro (km)", "odometer", { type: "number", inputMode: "numeric", placeholder: "ex: 45320" })}
+      {field("Média indicada no painel (km/L)", "avg", { type: "number", inputMode: "decimal", placeholder: "ex: 11.5" })}
+      {pricePerLiter && (
+        <div style={{ background: "#1C2128", borderRadius: 8, padding: "10px 14px", marginBottom: 14, fontSize: 13, color: "#5a6a7a" }}>
+          Preço por litro: <span style={{ color: "#F5A623", fontWeight: 600 }}>R$ {pricePerLiter}</span>
+        </div>
+      )}
+      <div style={{ marginBottom: 20 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+          <div onClick={() => set("reserve", !form.reserve)} style={{ width: 44, height: 24, borderRadius: 12, background: form.reserve ? "#F5A623" : "#2a3340", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
+            <div style={{ position: "absolute", top: 3, left: form.reserve ? 22 : 3, width: 18, height: 18, borderRadius: 9, background: "#fff", transition: "left 0.2s" }} />
+          </div>
+          <span style={{ fontSize: 14, color: "#8B95A3" }}>Estava na reserva</span>
+        </label>
+      </div>
+      <button onClick={submit} style={{ width: "100%", padding: "15px", background: "#F5A623", border: "none", borderRadius: 10, fontSize: 16, fontWeight: 700, color: "#0E1117", cursor: "pointer" }}>
+        {isEditing ? "Salvar alterações" : "Salvar abastecimento"}
+      </button>
+    </div>
+  );
+}
+
+// ─── FUEL LIST ───────────────────────────────────────────────────────────────
+function FuelList({ fuel, onNew, onEdit, onDelete }) {
+  const sorted = [...fuel].sort((a, b) => b.date?.localeCompare(a.date));
+  return (
+    <div style={{ padding: "0 16px" }}>
+      <div style={{ paddingTop: 56, paddingBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#E8EAF0" }}>Combustível</div>
+        <button onClick={onNew} style={{ background: "#F5A623", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 700, color: "#0E1117", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          <Icon name="plus" size={16} /> Abastecer
+        </button>
+      </div>
+      {sorted.length === 0 ? (
+        <div style={{ textAlign: "center", color: "#3a4a5a", padding: "48px 16px", border: "1px dashed #2a3340", borderRadius: 12, marginTop: 16 }}>
+          <Icon name="gas-station" size={36} />
+          <div style={{ fontSize: 14 }}>Nenhum abastecimento registrado</div>
+        </div>
+      ) : sorted.map((f, i) => {
+        const prev = sorted[i + 1];
+        const kmRodado = prev ? f.odometer - prev.odometer : null;
+        return (
+          <div key={f.id} style={{ background: "#1C2128", borderRadius: 12, padding: "14px 16px", marginBottom: 10, border: "1px solid #2a3340" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: 13, color: "#5a6a7a" }}>{f.date}</div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: "#E8EAF0" }}>{fmtR(f.total)}</div>
+              </div>
+              {f.reserve && (
+                <span style={{ fontSize: 10, background: "#2a1a00", color: "#F5A623", borderRadius: 4, padding: "2px 6px", border: "1px solid #F5A62344", alignSelf: "flex-start" }}>
+                  Reserva
+                </span>
+              )}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 10 }}>
+              {[["Litros", fmt(f.liters, 1), "L"], ["Hodômetro", fmt(f.odometer), "km"], ["Média", fmt(f.avg, 1), "km/L"]].map(([l, v, u]) => (
+                <div key={l} style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "#5a6a7a", marginBottom: 2 }}>{l}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#E8EAF0" }}>{v} <span style={{ fontSize: 10, color: "#5a6a7a" }}>{u}</span></div>
+                </div>
+              ))}
+            </div>
+            {kmRodado != null && (
+              <div style={{ fontSize: 12, color: "#5a6a7a", borderTop: "1px solid #2a3340", paddingTop: 8, marginBottom: 8 }}>
+                Rodou <span style={{ color: "#E8EAF0", fontWeight: 600 }}>{fmt(kmRodado)} km</span> desde o último abastecimento
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 16, borderTop: kmRodado != null ? "none" : "1px solid #2a3340", paddingTop: kmRodado != null ? 0 : 8 }}>
+              <button onClick={() => onEdit(f)} style={{ background: "none", border: "none", color: "#5a6a7a", cursor: "pointer", fontSize: 12, padding: 0, display: "flex", alignItems: "center", gap: 4 }}>
+                <Icon name="edit" size={14} /> Editar
+              </button>
+              <button onClick={() => onDelete(f.id)} style={{ background: "none", border: "none", color: "#3a4a5a", cursor: "pointer", fontSize: 12, padding: 0, display: "flex", alignItems: "center", gap: 4 }}>
+                <Icon name="trash" size={14} /> Excluir
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── KM SCREEN ──────────────────────────────────────────────────────────────
+function KmScreen({ months, onSave, onUpdate }) {
+  const todayMonth = currentMonth();
+  const [selMonth, setSelMonth] = useState(todayMonth);
+  const [km, setKm] = useState("");
+  const [errors, setErrors] = useState({});
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const existing = months.find(m => m.month === selMonth);
+    setKm(existing ? String(existing.km) : "");
+    setErrors({}); setSaved(false);
+  }, [selMonth, months]);
+
+  const monthLabel = (m) => {
+    const [y, mo] = m.split("-");
+    return new Date(Number(y), Number(mo) - 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+  };
+  const monthLabelCap = (m) => { const s = monthLabel(m); return s.charAt(0).toUpperCase() + s.slice(1); };
+
+  const sorted = [...months].sort((a, b) => a.month.localeCompare(b.month));
+  const kmRodado = (entry) => {
+    const idx = sorted.findIndex(m => m.month === entry.month);
+    if (idx <= 0) return null;
+    const prev = sorted[idx - 1];
+    if (!prev?.km || !entry?.km) return null;
+    return entry.km - prev.km;
+  };
+
+  const existingEntry = months.find(m => m.month === selMonth);
+  const previewKmRodado = (() => {
+    if (!km || isNaN(Number(km))) return null;
+    const before = [...months].filter(m => m.month < selMonth).sort((a, b) => b.month.localeCompare(a.month))[0];
+    if (!before?.km) return null;
+    const diff = Number(km) - before.km;
+    return diff > 0 ? diff : null;
+  })();
+  const previewPrevEntry = [...months].filter(m => m.month < selMonth).sort((a, b) => b.month.localeCompare(a.month))[0];
+
+  const submit = () => {
+    const e = {};
+    if (!km || isNaN(Number(km)) || Number(km) <= 0) e.km = "Informe o hodômetro";
+    if (!selMonth.match(/^\d{4}-\d{2}$/)) e.month = "Mês inválido";
+    if (Object.keys(e).length) { setErrors(e); return; }
+    const entry = { month: selMonth, km: Number(km) };
+    if (existingEntry) onUpdate(entry); else onSave(entry);
+    setSaved(true); setTimeout(() => setSaved(false), 2000);
+  };
+
+  const histSorted = [...months].sort((a, b) => b.month.localeCompare(a.month));
+
+  return (
+    <div style={{ padding: "0 16px" }}>
+      <div style={{ paddingTop: 56, paddingBottom: 16 }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#E8EAF0" }}>Km rodado</div>
+        <div style={{ fontSize: 13, color: "#5a6a7a", marginTop: 2 }}>Registre o hodômetro no início de cada mês</div>
+      </div>
+      <div style={{ background: "#1C2128", borderRadius: 12, padding: "16px", marginBottom: 16, border: "1px solid #2a3340" }}>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 12, color: "#5a6a7a", display: "block", marginBottom: 4 }}>Mês de referência</label>
+          <input type="month" value={selMonth} onChange={e => setSelMonth(e.target.value)}
+            style={{ width: "100%", background: "#0E1117", border: `1px solid ${errors.month ? "#e24b4a" : "#2a3340"}`, borderRadius: 8, padding: "12px 14px", fontSize: 16, color: "#E8EAF0", boxSizing: "border-box", outline: "none", fontFamily: "inherit", colorScheme: "dark" }} />
+          {errors.month && <div style={{ fontSize: 11, color: "#e24b4a", marginTop: 3 }}>{errors.month}</div>}
+          {selMonth && !errors.month && (
+            <div style={{ fontSize: 12, color: "#5a6a7a", marginTop: 4 }}>
+              {monthLabelCap(selMonth)}{selMonth === todayMonth && <span style={{ color: "#F5A623", marginLeft: 6 }}>• mês atual</span>}
+            </div>
+          )}
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 12, color: "#5a6a7a", display: "block", marginBottom: 4 }}>Hodômetro em 1º do mês (km)</label>
+          <input value={km} onChange={e => { setKm(e.target.value); setErrors(er => ({ ...er, km: "" })); setSaved(false); }}
+            type="number" inputMode="numeric" placeholder="ex: 45320"
+            style={{ width: "100%", background: "#0E1117", border: `1px solid ${errors.km ? "#e24b4a" : "#2a3340"}`, borderRadius: 8, padding: "12px 14px", fontSize: 16, color: "#E8EAF0", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
+          {errors.km && <div style={{ fontSize: 11, color: "#e24b4a", marginTop: 3 }}>{errors.km}</div>}
+        </div>
+        {previewKmRodado != null && previewPrevEntry && (
+          <div style={{ background: "#0E1117", borderRadius: 8, padding: "10px 14px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#5a6a7a", marginBottom: 2 }}>Km rodados em</div>
+              <div style={{ fontSize: 13, color: "#E8EAF0" }}>{monthLabelCap(previewPrevEntry.month)}</div>
+            </div>
+            <span style={{ fontSize: 18, fontWeight: 700, color: "#F5A623" }}>{fmt(previewKmRodado)} km</span>
+          </div>
+        )}
+        <button onClick={submit} style={{ width: "100%", padding: "13px", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, cursor: "pointer", transition: "background 0.3s", background: saved ? "#1a3a1a" : "#F5A623", color: saved ? "#4CAF50" : "#0E1117" }}>
+          {saved ? "✓ Salvo" : existingEntry ? "Atualizar registro" : "Salvar registro"}
+        </button>
+      </div>
+      {histSorted.length > 0 && (
+        <>
+          <div style={{ fontSize: 11, color: "#5a6a7a", marginBottom: 10, letterSpacing: "0.06em" }}>HISTÓRICO</div>
+          {histSorted.map(entry => {
+            const diff = kmRodado(entry);
+            const isSelected = entry.month === selMonth;
+            const nextEntry = sorted[sorted.findIndex(m => m.month === entry.month) + 1];
+            const closed = !!nextEntry;
+            return (
+              <button key={entry.month} onClick={() => setSelMonth(entry.month)} style={{ width: "100%", background: isSelected ? "#232d3a" : "#1C2128", borderRadius: 10, padding: "12px 16px", marginBottom: 8, cursor: "pointer", border: `1px solid ${isSelected ? "#F5A623aa" : "#2a3340"}`, display: "flex", justifyContent: "space-between", alignItems: "center", textAlign: "left" }}>
+                <div>
+                  <div style={{ fontSize: 13, color: "#E8EAF0", fontWeight: 600 }}>{monthLabelCap(entry.month)}</div>
+                  <div style={{ fontSize: 11, color: "#5a6a7a", marginTop: 2 }}>
+                    Hodômetro: {fmt(entry.km)} km{!closed && <span style={{ color: "#F5A623", marginLeft: 6 }}>• em andamento</span>}
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  {diff != null ? (() => {
+                    const idx2 = sorted.findIndex(m => m.month === entry.month);
+                    const prevM = idx2 > 0 ? sorted[idx2 - 1] : null;
+                    return (<>
+                      <div style={{ fontSize: 18, fontWeight: 700, color: "#E8EAF0" }}>{fmt(diff)} km</div>
+                      <div style={{ fontSize: 10, color: "#5a6a7a" }}>rodados em {prevM ? monthLabelCap(prevM.month) : ""}</div>
+                    </>);
+                  })() : <div style={{ fontSize: 12, color: "#3a4a5a" }}>—</div>}
+                </div>
+              </button>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── REVISION SCREEN ─────────────────────────────────────────────────────────
+function RevisionScreen({ revisions, onSave }) {
+  // revisions = { next: { date, km, value }, history: [{id, date, km, value, notes}] }
+  const next = revisions?.next ?? { date: "", km: "", value: "" };
+  const history = revisions?.history ?? [];
+
+  const [nextForm, setNextForm] = useState({ date: next.date || "", km: next.km ? String(next.km) : "", value: next.value ? String(next.value) : "" });
+  const [doneForm, setDoneForm] = useState({ date: today(), km: "", value: "", notes: "" });
+  const [nextSaved, setNextSaved] = useState(false);
+  const [doneSaved, setDoneSaved] = useState(false);
+  const [doneErrors, setDoneErrors] = useState({});
+  const [tab, setTab] = useState("next"); // "next" | "done"
+
+  const setN = (k, v) => setNextForm(f => ({ ...f, [k]: v }));
+  const setD = (k, v) => { setDoneForm(f => ({ ...f, [k]: v })); setDoneErrors(e => ({ ...e, [k]: "" })); };
+
+  const saveNext = () => {
+    onSave({ ...revisions, next: { date: nextForm.date, km: nextForm.km ? Number(nextForm.km) : null, value: nextForm.value ? Number(nextForm.value) : null } });
+    setNextSaved(true); setTimeout(() => setNextSaved(false), 2000);
+  };
+
+  const saveDone = () => {
+    const e = {};
+    if (!doneForm.date) e.date = "Informe a data";
+    if (!doneForm.km || isNaN(Number(doneForm.km))) e.km = "Informe o hodômetro";
+    if (Object.keys(e).length) { setDoneErrors(e); return; }
+    const entry = { id: Date.now(), date: doneForm.date, km: Number(doneForm.km), value: doneForm.value ? Number(doneForm.value) : null, notes: doneForm.notes };
+    const newHistory = [entry, ...(revisions?.history ?? [])];
+    onSave({ ...revisions, history: newHistory });
+    setDoneForm({ date: today(), km: "", value: "", notes: "" });
+    setDoneSaved(true); setTimeout(() => setDoneSaved(false), 2000);
+  };
+
+  const deleteHistory = (id) => {
+    onSave({ ...revisions, history: (revisions?.history ?? []).filter(h => h.id !== id) });
+  };
+
+  const daysLeft = next.date ? daysBetween(next.date) : null;
+  const inp = (label, val, onChange, placeholder, type = "text", err = null) => (
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ fontSize: 12, color: "#5a6a7a", display: "block", marginBottom: 4 }}>{label}</label>
+      <input value={val} onChange={e => onChange(e.target.value)} type={type} placeholder={placeholder}
+        style={{ width: "100%", background: "#0E1117", border: `1px solid ${err ? "#e24b4a" : "#2a3340"}`, borderRadius: 8, padding: "12px 14px", fontSize: 15, color: "#E8EAF0", boxSizing: "border-box", outline: "none", fontFamily: "inherit", colorScheme: "dark" }} />
+      {err && <div style={{ fontSize: 11, color: "#e24b4a", marginTop: 3 }}>{err}</div>}
+    </div>
+  );
+
+  return (
+    <div style={{ padding: "0 16px" }}>
+      <div style={{ paddingTop: 56, paddingBottom: 16 }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#E8EAF0" }}>Revisões</div>
+        <div style={{ fontSize: 13, color: "#5a6a7a", marginTop: 2 }}>Agendamento e histórico</div>
+      </div>
+
+      {/* Tab toggle */}
+      <div style={{ display: "flex", background: "#1C2128", borderRadius: 10, padding: 4, marginBottom: 16, border: "1px solid #2a3340" }}>
+        {[["next", "Próxima revisão"], ["done", "Registrar realizada"]].map(([id, label]) => (
+          <button key={id} onClick={() => setTab(id)} style={{ flex: 1, padding: "9px 0", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", background: tab === id ? "#F5A623" : "none", color: tab === id ? "#0E1117" : "#5a6a7a", transition: "all 0.2s" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "next" && (
+        <>
+          {/* Next revision banner */}
+          {(next.date || next.km) && (
+            <div style={{ background: daysLeft != null && daysLeft < 30 ? "#2a1a00" : "#1C2128", border: `1px solid ${daysLeft != null && daysLeft < 30 ? "#F5A62355" : "#2a3340"}`, borderRadius: 12, padding: "14px 16px", marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: "#5a6a7a", marginBottom: 8, letterSpacing: "0.04em" }}>PRÓXIMA REVISÃO AGENDADA</div>
+              <div style={{ display: "flex", gap: 20 }}>
+                {next.date && (
+                  <div>
+                    <div style={{ fontSize: 11, color: "#5a6a7a" }}>Data</div>
+                    <div style={{ fontSize: 17, fontWeight: 700, color: "#E8EAF0" }}>{fmtDate(next.date)}</div>
+                    {daysLeft != null && <div style={{ fontSize: 11, color: daysLeft < 30 ? "#F5A623" : "#5a6a7a", marginTop: 2 }}>{daysLeft > 0 ? `em ${daysLeft} dias` : daysLeft === 0 ? "hoje" : "VENCIDA"}</div>}
+                  </div>
+                )}
+                {next.km && (
+                  <div>
+                    <div style={{ fontSize: 11, color: "#5a6a7a" }}>Km prevista</div>
+                    <div style={{ fontSize: 17, fontWeight: 700, color: "#E8EAF0" }}>{fmt(next.km)} km</div>
+                  </div>
+                )}
+                {next.value && (
+                  <div>
+                    <div style={{ fontSize: 11, color: "#5a6a7a" }}>Valor est.</div>
+                    <div style={{ fontSize: 17, fontWeight: 700, color: "#E8EAF0" }}>{fmtR(next.value)}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div style={{ background: "#1C2128", borderRadius: 12, padding: 16, border: "1px solid #2a3340" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#F5A623", marginBottom: 14 }}>Agendar próxima revisão</div>
+            {inp("Data prevista", nextForm.date, v => setN("date", v), "", "date")}
+            {inp("Km prevista", nextForm.km, v => setN("km", v), "ex: 55000", "number")}
+            {inp("Valor estimado (R$)", nextForm.value, v => setN("value", v), "ex: 350.00", "number")}
+            <button onClick={saveNext} style={{ width: "100%", padding: 13, background: nextSaved ? "#1a3a1a" : "#F5A623", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, color: nextSaved ? "#4CAF50" : "#0E1117", cursor: "pointer", transition: "background 0.3s" }}>
+              {nextSaved ? "✓ Agendamento salvo" : "Salvar agendamento"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {tab === "done" && (
+        <>
+          <div style={{ background: "#1C2128", borderRadius: 12, padding: 16, marginBottom: 16, border: "1px solid #2a3340" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#F5A623", marginBottom: 14 }}>Registrar revisão realizada</div>
+            {inp("Data da revisão", doneForm.date, v => setD("date", v), "", "date", doneErrors.date)}
+            {inp("Hodômetro na revisão (km)", doneForm.km, v => setD("km", v), "ex: 50000", "number", doneErrors.km)}
+            {inp("Valor pago (R$)", doneForm.value, v => setD("value", v), "ex: 320.00", "number")}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ fontSize: 12, color: "#5a6a7a", display: "block", marginBottom: 4 }}>Observações (opcional)</label>
+              <textarea value={doneForm.notes} onChange={e => setD("notes", e.target.value)} placeholder="ex: Troca de óleo, filtro de ar..."
+                style={{ width: "100%", background: "#0E1117", border: "1px solid #2a3340", borderRadius: 8, padding: "12px 14px", fontSize: 14, color: "#E8EAF0", boxSizing: "border-box", outline: "none", fontFamily: "inherit", resize: "vertical", minHeight: 72 }} />
+            </div>
+            <button onClick={saveDone} style={{ width: "100%", padding: 13, background: doneSaved ? "#1a3a1a" : "#F5A623", border: "none", borderRadius: 10, fontSize: 15, fontWeight: 700, color: doneSaved ? "#4CAF50" : "#0E1117", cursor: "pointer", transition: "background 0.3s" }}>
+              {doneSaved ? "✓ Revisão registrada" : "Registrar revisão"}
+            </button>
+          </div>
+
+          {history.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, color: "#5a6a7a", marginBottom: 10, letterSpacing: "0.06em" }}>HISTÓRICO DE REVISÕES</div>
+              {[...history].sort((a, b) => b.date?.localeCompare(a.date)).map(h => (
+                <div key={h.id} style={{ background: "#1C2128", borderRadius: 12, padding: "14px 16px", marginBottom: 10, border: "1px solid #2a3340" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: "#E8EAF0" }}>{fmtDate(h.date)}</div>
+                      <div style={{ fontSize: 12, color: "#5a6a7a", marginTop: 2 }}>{fmt(h.km)} km</div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      {h.value && <div style={{ fontSize: 15, fontWeight: 600, color: "#F5A623" }}>{fmtR(h.value)}</div>}
+                    </div>
+                  </div>
+                  {h.notes && <div style={{ fontSize: 12, color: "#8B95A3", borderTop: "1px solid #2a3340", paddingTop: 8, marginBottom: 6 }}>{h.notes}</div>}
+                  <button onClick={() => deleteHistory(h.id)} style={{ background: "none", border: "none", color: "#3a4a5a", cursor: "pointer", fontSize: 12, padding: 0, display: "flex", alignItems: "center", gap: 4 }}>
+                    <Icon name="trash" size={14} /> Excluir
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
+          {history.length === 0 && (
+            <div style={{ textAlign: "center", color: "#3a4a5a", padding: "32px 16px", border: "1px dashed #2a3340", borderRadius: 12 }}>
+              <Icon name="tool" size={32} />
+              <div style={{ fontSize: 14 }}>Nenhuma revisão registrada ainda</div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── VEHICLE SETUP ──────────────────────────────────────────────────────────
+function VehicleSetup({ vehicle, onSaveVehicle, allData, onImport }) {
+  const [vForm, setVForm] = useState({ model: vehicle?.model || "", year: vehicle?.year || "", plate: vehicle?.plate || "" });
+  const [savedV, setSavedV] = useState(false);
+  const [importState, setImportState] = useState(null); // null|"confirm"|"success"|"error"|"manual"
+  const [importPayload, setImportPayload] = useState(null);
+  const [importError, setImportError] = useState("");
+  const [exportJson, setExportJson] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const saveV = () => { onSaveVehicle(vForm); setSavedV(true); setTimeout(() => setSavedV(false), 2000); };
+
+  const handleExport = async () => {
+    const payload = { _autolog_version: 1, _exported_at: new Date().toISOString(), ...allData };
+    const json = JSON.stringify(payload, null, 2);
+    const filename = `autolog-backup-${new Date().toISOString().slice(0, 10)}.json`;
+
+    // 1) Web Share API — melhor no mobile (abre menu nativo de compartilhamento)
+    if (navigator.canShare && navigator.share) {
+      try {
+        const file = new File([json], filename, { type: "application/json" });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: "AutoLog Backup" });
+          return;
+        }
+      } catch (e) {
+        if (e.name !== "AbortError") { /* segue para próximo método */ }
+        else return; // usuário cancelou o share
+      }
+    }
+
+    // 2) Download via <a> — funciona no desktop e alguns browsers mobile
+    try {
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      return;
+    } catch (e) { /* segue para fallback */ }
+
+    // 3) Fallback: exibe o JSON para copiar manualmente
+    setExportJson(json);
+    setImportState("manual");
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if (!parsed._autolog_version) throw new Error("invalido");
+        setImportPayload(parsed);
+        setImportState("confirm");
+        setImportError("");
+      } catch {
+        setImportState("error");
+        setImportError("O arquivo selecionado não é um backup válido do AutoLog.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const confirmImport = () => {
+    onImport(importPayload);
+    setImportState("success");
+    setImportPayload(null);
+    setTimeout(() => setImportState(null), 3000);
+  };
+
+  const cancelImport = () => { setImportState(null); setImportPayload(null); setExportJson(""); };
+
+  const handleCopy = () => {
+    navigator.clipboard?.writeText(exportJson).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      // fallback: select the textarea
+      const ta = document.getElementById("export-json-ta");
+      if (ta) { ta.select(); document.execCommand("copy"); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    });
+  };
+
+  const inp = (label, val, onChange, placeholder, type = "text") => (
+    <div style={{ marginBottom: 12 }}>
+      <label style={{ fontSize: 12, color: "#5a6a7a", display: "block", marginBottom: 4 }}>{label}</label>
+      <input value={val} onChange={e => onChange(e.target.value)} type={type} placeholder={placeholder}
+        style={{ width: "100%", background: "#0E1117", border: "1px solid #2a3340", borderRadius: 8, padding: "12px 14px", fontSize: 15, color: "#E8EAF0", boxSizing: "border-box", outline: "none", fontFamily: "inherit" }} />
+    </div>
+  );
+
+  return (
+    <div style={{ padding: "0 16px" }}>
+      <div style={{ paddingTop: 56, paddingBottom: 16 }}>
+        <div style={{ fontSize: 20, fontWeight: 700, color: "#E8EAF0" }}>Configurações</div>
+      </div>
+
+      <div style={{ background: "#1C2128", borderRadius: 12, padding: 16, marginBottom: 14, border: "1px solid #2a3340" }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#F5A623", marginBottom: 12 }}>Dados do veículo</div>
+        {inp("Modelo", vForm.model, v => setVForm(f => ({ ...f, model: v })), "ex: Onix 1.0 Turbo")}
+        {inp("Ano", vForm.year, v => setVForm(f => ({ ...f, year: v })), "ex: 2022", "number")}
+        {inp("Placa", vForm.plate, v => setVForm(f => ({ ...f, plate: v })), "ex: ABC-1D23")}
+        <button onClick={saveV} style={{ width: "100%", padding: 12, background: savedV ? "#1a3a1a" : "#F5A623", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 700, color: savedV ? "#4CAF50" : "#0E1117", cursor: "pointer" }}>
+          {savedV ? "✓ Salvo" : "Salvar veículo"}
+        </button>
+      </div>
+
+      <div style={{ background: "#1C2128", borderRadius: 12, padding: 16, border: "1px solid #2a3340" }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#F5A623", marginBottom: 4 }}>Backup de dados</div>
+        <div style={{ fontSize: 12, color: "#5a6a7a", marginBottom: 14 }}>
+          Exporte seus dados para fazer backup ou migrar para outro dispositivo.
+        </div>
+
+        <button onClick={handleExport} style={{ width: "100%", padding: 12, background: "#0E1117", border: "1px solid #2a3340", borderRadius: 8, fontSize: 14, fontWeight: 600, color: "#E8EAF0", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 10 }}>
+          <Icon name="download" size={17} /> Exportar / Compartilhar dados
+        </button>
+
+        <label style={{ display: "block" }}>
+          <div style={{ width: "100%", padding: 12, background: "#0E1117", border: "1px solid #2a3340", borderRadius: 8, fontSize: 14, fontWeight: 600, color: "#E8EAF0", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxSizing: "border-box" }}>
+            <Icon name="upload" size={17} /> Importar backup (.json)
+          </div>
+          <input type="file" accept=".json" onChange={handleFileChange} style={{ display: "none" }} />
+        </label>
+
+        {importState === "confirm" && (
+          <div style={{ marginTop: 12, background: "#2a1a00", border: "1px solid #F5A62355", borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontSize: 13, color: "#F5A623", fontWeight: 600, marginBottom: 6 }}>
+              <Icon name="alert-triangle" size={14} />
+              Confirmar importação?
+            </div>
+            <div style={{ fontSize: 12, color: "#8B95A3", marginBottom: 12 }}>
+              Os dados atuais serão substituídos pelo backup de{" "}
+              <span style={{ color: "#E8EAF0" }}>
+                {importPayload?._exported_at ? new Date(importPayload._exported_at).toLocaleDateString("pt-BR") : "data desconhecida"}
+              </span>.
+              Esta ação não pode ser desfeita.
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={cancelImport} style={{ flex: 1, padding: "9px 0", background: "none", border: "1px solid #2a3340", borderRadius: 7, fontSize: 13, color: "#5a6a7a", cursor: "pointer" }}>
+                Cancelar
+              </button>
+              <button onClick={confirmImport} style={{ flex: 1, padding: "9px 0", background: "#F5A623", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 700, color: "#0E1117", cursor: "pointer" }}>
+                Sim, importar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {importState === "success" && (
+          <div style={{ marginTop: 12, background: "#0a2a0a", border: "1px solid #2d5a2d", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#4CAF50", display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="check" size={16} /> Dados importados com sucesso!
+          </div>
+        )}
+
+        {importState === "error" && (
+          <div style={{ marginTop: 12, background: "#2a0a0a", border: "1px solid #5a2d2d", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#e24b4a", display: "flex", alignItems: "center", gap: 8 }}>
+            <Icon name="x" size={16} /> {importError}
+          </div>
+        )}
+
+        {importState === "manual" && exportJson && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12, color: "#F5A623", fontWeight: 600, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+              <Icon name="download" size={14} /> Copie o backup abaixo
+            </div>
+            <div style={{ fontSize: 11, color: "#5a6a7a", marginBottom: 8 }}>
+              Selecione tudo, copie e salve num arquivo <strong style={{color:"#E8EAF0"}}>.json</strong> no seu dispositivo.
+            </div>
+            <textarea
+              id="export-json-ta"
+              readOnly
+              value={exportJson}
+              style={{ width: "100%", height: 100, background: "#0E1117", border: "1px solid #2a3340", borderRadius: 8, padding: "10px", fontSize: 11, color: "#5a6a7a", boxSizing: "border-box", fontFamily: "monospace", resize: "none", outline: "none" }}
+              onFocus={e => e.target.select()}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button onClick={handleCopy} style={{ flex: 1, padding: "9px 0", background: copied ? "#1a3a1a" : "#F5A623", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 700, color: copied ? "#4CAF50" : "#0E1117", cursor: "pointer" }}>
+                {copied ? "✓ Copiado!" : "Copiar JSON"}
+              </button>
+              <button onClick={cancelImport} style={{ flex: 1, padding: "9px 0", background: "none", border: "1px solid #2a3340", borderRadius: 7, fontSize: 13, color: "#5a6a7a", cursor: "pointer" }}>
+                Fechar
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 14, fontSize: 11, color: "#3a4a5a", textAlign: "center" }}>
+          O arquivo contém abastecimentos, km, revisões e dados do veículo.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── APP ────────────────────────────────────────────────────────────────────
+export default function App() {
+  const [screen, setScreen] = useState("home");
+  const [subscreen, setSubscreen] = useState(null);
+  const [editingFuel, setEditingFuel] = useState(null);
+
+  const [fuel, setFuel]           = useState(() => load(STORAGE_KEYS.fuel, []));
+  const [months, setMonths]       = useState(() => load(STORAGE_KEYS.months, []));
+  const [vehicle, setVehicle]     = useState(() => load(STORAGE_KEYS.vehicle, null));
+  const [revisions, setRevisions] = useState(() => load(STORAGE_KEYS.revisions, { next: null, history: [] }));
+
+  useEffect(() => save(STORAGE_KEYS.fuel, fuel), [fuel]);
+  useEffect(() => save(STORAGE_KEYS.months, months), [months]);
+  useEffect(() => save(STORAGE_KEYS.vehicle, vehicle), [vehicle]);
+  useEffect(() => save(STORAGE_KEYS.revisions, revisions), [revisions]);
+
+  const addFuel    = (e) => { setFuel(f => [...f, e]); setSubscreen(null); };
+  const updateFuel = (e) => { setFuel(f => f.map(x => x.id === e.id ? e : x)); setSubscreen(null); setEditingFuel(null); };
+  const deleteFuel = (id) => setFuel(f => f.filter(x => x.id !== id));
+  const saveMonth  = (e) => setMonths(m => [...m, e]);
+  const updateMonth= (e) => setMonths(m => m.map(x => x.month === e.month ? e : x));
+
+  const mainScreen = () => {
+    if (screen === "fuel") {
+      if (subscreen === "new")  return <FuelForm onSave={addFuel} onCancel={() => setSubscreen(null)} />;
+      if (subscreen === "edit" && editingFuel) return <FuelForm initialData={editingFuel} onSave={updateFuel} onCancel={() => { setSubscreen(null); setEditingFuel(null); }} />;
+      return <FuelList fuel={fuel} onNew={() => setSubscreen("new")} onEdit={(f) => { setEditingFuel(f); setSubscreen("edit"); }} onDelete={deleteFuel} />;
+    }
+    if (screen === "km")       return <KmScreen months={months} onSave={saveMonth} onUpdate={updateMonth} />;
+    if (screen === "revision") return <RevisionScreen revisions={revisions} onSave={setRevisions} />;
+    return <Home fuel={fuel} months={months} vehicle={vehicle} revisions={revisions} />;
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0E1117", color: "#E8EAF0", fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif", paddingBottom: 80, maxWidth: 480, margin: "0 auto", position: "relative" }}>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+      <button onClick={() => setScreen(screen === "settings" ? "home" : "settings")} style={{ position: "fixed", top: 16, right: 16, zIndex: 200, background: "#1C2128", border: "1px solid #2a3340", borderRadius: 8, width: 38, height: 38, display: "flex", alignItems: "center", justifyContent: "center", color: "#5a6a7a", cursor: "pointer" }}>
+        <Icon name={screen === "settings" ? "x" : "settings"} size={18} color="#5a6a7a" />
+      </button>
+      {screen === "settings"
+        ? <VehicleSetup
+            vehicle={vehicle}
+            onSaveVehicle={setVehicle}
+            allData={{ fuel, months, vehicle, revisions }}
+            onImport={(d) => {
+              if (d.fuel)      setFuel(d.fuel);
+              if (d.months)    setMonths(d.months);
+              if (d.vehicle)   setVehicle(d.vehicle);
+              if (d.revisions) setRevisions(d.revisions);
+            }}
+          />
+        : mainScreen()
+      }
+      {screen !== "settings" && <Nav screen={screen} setScreen={(s) => { setScreen(s); setSubscreen(null); }} />}
+    </div>
+  );
+}

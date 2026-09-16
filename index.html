@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0E1117" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="AutoLog" />
+  <title>AutoLog</title>
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root {
+      height: 100%;
+      background: #0E1117;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior: none;
+    }
+    /* Evita bounce no iOS */
+    body { position: fixed; width: 100%; overflow: hidden; }
+    #root { overflow-y: auto; height: 100%; }
+    /* Loading spinner */
+    #splash {
+      position: fixed; inset: 0;
+      background: #0E1117;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 16px; z-index: 9999;
+    }
+    #splash svg { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #splash p { color: #5a6a7a; font-size: 14px; font-family: 'Inter', sans-serif; }
+    input[type="date"], input[type="month"], input[type="number"] {
+      -webkit-appearance: none;
+      appearance: none;
+      color-scheme: dark;
+    }
+  </style>
+</head>
+<body>
+  <div id="splash">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none"
+         stroke="#F5A623" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83
+               M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+    </svg>
+    <p>Carregando AutoLog…</p>
+  </div>
+
+  <div id="root"></div>
+
+  <!-- React -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel standalone para compilar JSX no browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Carrega e compila o app.jsx -->
+  <script>
+    fetch('app.jsx')
+      .then(r => r.text())
+      .then(src => {
+        // Transforma o JSX + ES modules para browser
+        const transformed = Babel.transform(src, {
+          presets: ['react'],
+          plugins: [
+            // transforma export default em window.AppComponent
+            function({ types: t }) {
+              return {
+                visitor: {
+                  ExportDefaultDeclaration(path) {
+                    const decl = path.node.declaration;
+                    path.replaceWith(
+                      t.expressionStatement(
+                        t.assignmentExpression('=',
+                          t.memberExpression(t.identifier('window'), t.identifier('AppComponent')),
+                          decl
+                        )
+                      )
+                    );
+                  },
+                  ImportDeclaration(path) {
+                    // Remove os imports de React (já carregados via UMD)
+                    path.remove();
+                  }
+                }
+              };
+            }
+          ]
+        }).code;
+
+        // Injeta React no escopo global para o JSX compilado
+        window.useState   = React.useState;
+        window.useEffect  = React.useEffect;
+
+        // Executa o código transformado
+        // eslint-disable-next-line no-new-func
+        new Function(transformed)();
+
+        // Monta o app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(window.AppComponent));
+
+        // Remove splash
+        document.getElementById('splash').remove();
+      })
+      .catch(err => {
+        document.getElementById('splash').innerHTML =
+          `<p style="color:#e24b4a;padding:24px;text-align:center">
+            Erro ao carregar o app.<br/><small>${err.message}</small>
+          </p>`;
+      });
+  </script>
+
+  <!-- Registra o Service Worker -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+          .catch(err => console.warn('SW registro falhou:', err));
+      });
+    }
+  </script>
+</body>
+</html>

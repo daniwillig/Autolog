@@ -911,8 +911,33 @@ function App() {
 }
 
 
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error('AutoLog crash:', error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ minHeight: "100vh", background: "#0E1117", color: "#ff6b6b", fontFamily: "sans-serif", padding: 24, textAlign: "center" }}>
+          <p style={{ fontWeight: 700, marginBottom: 12 }}>Erro ao carregar o app.</p>
+          <p style={{ fontSize: 13, wordBreak: "break-word" }}>{String(this.state.error && this.state.error.stack || this.state.error)}</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
     const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
+    try {
+      root.render(<ErrorBoundary><App /></ErrorBoundary>);
+    } catch (error) {
+      console.error('AutoLog crash:', error);
+      document.getElementById('root').innerHTML =
+        '<div style="min-height:100vh;background:#0E1117;color:#ff6b6b;font-family:sans-serif;padding:24px;text-align:center">' +
+        '<p style="font-weight:700;margin-bottom:12px">Erro ao carregar o app.</p>' +
+        '<p style="font-size:13px;word-break:break-word">' + String((error && error.stack) || error) + '</p></div>';
+    }
     document.getElementById('splash').remove();
   </script>
 
